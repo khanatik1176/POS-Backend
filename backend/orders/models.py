@@ -135,6 +135,9 @@ class Order(TimeStampedModel):
         blank=True,
         related_name="renewal_orders"
     )
+    
+    verified_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.customer_name
