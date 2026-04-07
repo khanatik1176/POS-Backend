@@ -1,12 +1,18 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
-from .views import ProductListAPIView, ReferenceSearchAPIView, OrderViewSet
-
-router = DefaultRouter()
-router.register('orders', OrderViewSet, basename='orders')
+from django.urls import path
+from .views import (
+    MasterDataView,
+    ReferenceSearchView,
+    OrderCreateView,
+    OrderListView,
+    VerifyOrderView,
+    CompleteOrderView,
+)
 
 urlpatterns = [
-    path('products/', ProductListAPIView.as_view(), name='products'),
-    path('references/', ReferenceSearchAPIView.as_view(), name='reference-search'),
-    path('', include(router.urls)),
+    path("master-data/", MasterDataView.as_view(), name="master-data"),
+    path("references/search/", ReferenceSearchView.as_view(), name="reference-search"),
+    path("orders/", OrderListView.as_view(), name="order-list"),
+    path("orders/create/", OrderCreateView.as_view(), name="order-create"),
+    path("orders/<int:order_id>/verify/", VerifyOrderView.as_view(), name="order-verify"),
+    path("orders/<int:order_id>/complete/", CompleteOrderView.as_view(), name="order-complete"),
 ]

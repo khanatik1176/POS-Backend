@@ -1,26 +1,81 @@
 from django.core.management.base import BaseCommand
-from django.contrib.auth.models import User
-from orders.models import Product, PackageType
 
-
-SEED_PRODUCTS = {
-    'Facebook Boost': ['Basic', 'Standard', 'Premium'],
-    'YouTube Watch Time': ['1000 Hours', '4000 Hours'],
-    'Instagram Growth': ['Starter', 'Business', 'Creator'],
-}
+from orders.models import (
+    PlatformType,
+    PaymentMethod,
+    PaymentMedium,
+    OrderStatus,
+    CustomerStatus,
+)
 
 
 class Command(BaseCommand):
-    help = 'Seed initial products, packages, and an admin user.'
+    help = "Seed master data"
 
-    def handle(self, *args, **options):
-        for product_name, packages in SEED_PRODUCTS.items():
-            product, _ = Product.objects.get_or_create(name=product_name)
-            for package_name in packages:
-                PackageType.objects.get_or_create(product=product, name=package_name)
+    def handle(self, *args, **kwargs):
+        platform_types = [
+            ("Facebook", "facebook"),
+            ("Instagram", "instagram"),
+            ("YouTube", "youtube"),
+            ("Website", "website"),
+            ("TikTok", "tiktok"),
+            ("Other", "other"),
+        ]
 
-        if not User.objects.filter(username='admin').exists():
-            User.objects.create_superuser('admin', 'admin@example.com', 'admin1234')
-            self.stdout.write(self.style.SUCCESS('Created default admin user: admin / admin1234'))
+        payment_methods = [
+            ("bKash", "bkash"),
+            ("Nagad", "nagad"),
+            ("Bank Transfer", "bank"),
+            ("Card", "card"),
+            ("Cash", "cash"),
+        ]
 
-        self.stdout.write(self.style.SUCCESS('Seed complete.'))
+        payment_mediums = [
+            ("Online", "online"),
+            ("Offline", "offline"),
+            ("Mobile Banking", "mobile_banking"),
+            ("POS", "pos"),
+        ]
+
+        statuses = [
+            ("Ordered", "ordered", "blue"),
+            ("Verified", "verified", "green"),
+            ("Completed", "completed", "gray"),
+        ]
+
+        customer_statuses = [
+            ("New", "new"),
+            ("Renewal", "renewal"),
+        ]
+
+        for i, (name, code) in enumerate(platform_types, start=1):
+            PlatformType.objects.get_or_create(
+                code=code,
+                defaults={"name": name, "sort_order": i}
+            )
+
+        for i, (name, code) in enumerate(payment_methods, start=1):
+            PaymentMethod.objects.get_or_create(
+                code=code,
+                defaults={"name": name, "sort_order": i}
+            )
+
+        for i, (name, code) in enumerate(payment_mediums, start=1):
+            PaymentMedium.objects.get_or_create(
+                code=code,
+                defaults={"name": name, "sort_order": i}
+            )
+
+        for i, (name, code, color_code) in enumerate(statuses, start=1):
+            OrderStatus.objects.get_or_create(
+                code=code,
+                defaults={"name": name, "color_code": color_code, "sort_order": i}
+            )
+
+        for i, (name, code) in enumerate(customer_statuses, start=1):
+            CustomerStatus.objects.get_or_create(
+                code=code,
+                defaults={"name": name, "sort_order": i}
+            )
+
+        self.stdout.write(self.style.SUCCESS("Master data seeded successfully."))
