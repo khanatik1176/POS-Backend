@@ -28,6 +28,7 @@ from .serializers import (
     OrderCreateSerializer,
     DeliverOrderSerializer,
 )
+from .telegram_bot import send_order_for_review, answer_callback_query, edit_message
 
 
 class ProductListAPIView(generics.ListAPIView):
@@ -106,6 +107,10 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
+
+        amount = request.data.get('amount')
+        send_order_for_review(order, amount=amount)
+
         data = OrderSerializer(order).data
         return Response(data, status=status.HTTP_201_CREATED)
 
@@ -128,3 +133,71 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
         return Response(OrderSerializer(order).data)
+
+
+class TelegramWebhookAPIView(views.APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request, *args, **kwargs):
+        callback_query = request.data.get('callback_query')
+        if not callback_query:
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        callback_id = callback_query.get('id')
+        data = callback_query.get('data', '')
+        if not data.startswith('ord|'):
+            answer_callback_query(callback_id, 'Unknown action')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        parts = data.split('|')
+        if len(parts) != 3:
+            answer_callback_query(callback_id, 'Invalid action payload')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        _, order_id, action = parts
+        order = Order.objects.filter(pk=order_id).first()
+        if not order:
+            answer_callback_query(callback_id, 'Order not found')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        if action == 'ap':
+            status_obj = OrderStatus.objects.filter(code='verified').first()
+            order.status = status_obj
+            order.verified_at = timezone.now()
+            order.save(update_fields=['status', 'verified_at', 'updated_at'])
+            answer_callback_query(callback_id, 'Order approved')
+            result_text = 'Approved'
+        elif action == 'dc':
+            status_obj = OrderStatus.objects.filter(code='declined').first()
+            if not status_obj:
+                status_obj = OrderStatus.objects.filter(code='ordered').first()
+            order.status = status_obj
+            order.save(update_fields=['status', 'updated_at'])
+            answer_callback_query(callback_id, 'Order declined')
+            result_text = 'Declined'
+        else:
+            answer_callback_query(callback_id, 'Unknown action')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        message = callback_query.get('message', {})
+        chat = message.get('chat', {})
+        chat_id = chat.get('id')
+        message_id = message.get('message_id')
+        if chat_id and message_id:
+            payment_medium = order.payment_medium.name if order.payment_medium else 'N/A'
+            edit_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=(
+                    'Order Review Completed\n\n'
+                    f'Order ID: {order.id}\n'
+                    f'Reference No: {order.reference_number}\n'
+                    f'Payment Medium: {payment_medium}\n'
+                    f'Customer Name: {order.customer_name}\n'
+                    f'URL: {order.url}\n'
+                    f'Result: {result_text}'
+                ),
+            )
+
+        return Response({'ok': True}, status=status.HTTP_200_OK)

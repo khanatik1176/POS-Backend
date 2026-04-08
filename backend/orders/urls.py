@@ -8,6 +8,7 @@ from .views import (
     PaymentMediumListAPIView,
     OrderStatusListAPIView,
     CustomerStatusListAPIView,
+    TelegramWebhookAPIView,
     OrderViewSet,
 )
 
@@ -22,5 +23,6 @@ urlpatterns = [
     path('lookups/payment-mediums/', PaymentMediumListAPIView.as_view(), name='payment-mediums'),
     path('lookups/order-statuses/', OrderStatusListAPIView.as_view(), name='order-statuses'),
     path('lookups/customer-statuses/', CustomerStatusListAPIView.as_view(), name='customer-statuses'),
+    path('telegram/webhook/', TelegramWebhookAPIView.as_view(), name='telegram-webhook'),
     path('', include(router.urls)),
 ]
