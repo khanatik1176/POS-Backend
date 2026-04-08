@@ -73,10 +73,32 @@ class CustomerStatus(LookupBaseModel):
 class Order(TimeStampedModel):
     customer_name = models.CharField(max_length=255)
     url = models.URLField()
-    platform_type = models.ForeignKey(PlatformType, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
-    payment_method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
-    payment_medium = models.ForeignKey(PaymentMedium, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
-    reference_number = models.CharField(max_length=120)
+    quantity = models.PositiveIntegerField(default=1)
+    platform_type = models.ForeignKey(
+        PlatformType,
+        on_delete=models.PROTECT,
+        related_name='orders',
+        null=True,
+        blank=True,
+        db_column='platform_type_master_id',
+    )
+    payment_method = models.ForeignKey(
+        PaymentMethod,
+        on_delete=models.PROTECT,
+        related_name='orders',
+        null=True,
+        blank=True,
+        db_column='payment_method_master_id',
+    )
+    payment_medium = models.ForeignKey(
+        PaymentMedium,
+        on_delete=models.PROTECT,
+        related_name='orders',
+        null=True,
+        blank=True,
+        db_column='payment_medium_master_id',
+    )
+    reference_number = models.CharField(max_length=120, db_column='old_reference_number')
     previous_reference = models.ForeignKey(
         ReferenceNumber,
         on_delete=models.SET_NULL,
@@ -84,16 +106,28 @@ class Order(TimeStampedModel):
         blank=True,
         related_name='renewal_orders',
     )
-    delivered_reference = models.CharField(max_length=120, null=True, blank=True)
-    status = models.ForeignKey(OrderStatus, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
-    entry_time = models.DateTimeField(auto_now_add=True)
-    customer_status = models.ForeignKey(CustomerStatus, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
+    delivered_reference = models.CharField(max_length=120, null=True, blank=True, db_column='old_previous_reference')
+    status = models.ForeignKey(
+        OrderStatus,
+        on_delete=models.PROTECT,
+        related_name='orders',
+        null=True,
+        blank=True,
+        db_column='status_master_id',
+    )
+    customer_status = models.ForeignKey(
+        CustomerStatus,
+        on_delete=models.PROTECT,
+        related_name='orders',
+        null=True,
+        blank=True,
+        db_column='customer_status_master_id',
+    )
     verified_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
 
     class Meta:
-        ordering = ['-entry_time']
+        ordering = ['-created_at']
 
     def __str__(self):
         return f'{self.customer_name} - {self.reference_number}'

@@ -3,7 +3,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from .models import (
@@ -51,43 +51,51 @@ class ReferenceSearchAPIView(generics.ListAPIView):
 class PlatformTypeListAPIView(generics.ListAPIView):
     queryset = PlatformType.objects.filter(is_active=True).order_by('name')
     serializer_class = PlatformTypeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
 
 class PaymentMethodListAPIView(generics.ListAPIView):
     queryset = PaymentMethod.objects.filter(is_active=True).order_by('name')
     serializer_class = PaymentMethodSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
 
 class PaymentMediumListAPIView(generics.ListAPIView):
     queryset = PaymentMedium.objects.filter(is_active=True).order_by('name')
     serializer_class = PaymentMediumSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
 
 class OrderStatusListAPIView(generics.ListAPIView):
     queryset = OrderStatus.objects.filter(is_active=True).order_by('name')
     serializer_class = OrderStatusSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
 
 class CustomerStatusListAPIView(generics.ListAPIView):
     queryset = CustomerStatus.objects.filter(is_active=True).order_by('name')
     serializer_class = CustomerStatusSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
 
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.select_related(
-        'platform_type', 'payment_method', 'payment_medium', 'status', 'customer_status', 'previous_reference', 'created_by'
+        'platform_type', 'payment_method', 'payment_medium', 'status', 'customer_status', 'previous_reference'
     ).prefetch_related('items__product', 'items__package_type').all()
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['status', 'customer_status', 'platform_type', 'payment_method', 'payment_medium']
     search_fields = ['customer_name', 'url', 'reference_number']
-    ordering_fields = ['entry_time']
-    ordering = ['-entry_time']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        ordering = self.request.query_params.get('ordering')
+        if ordering in ('entry_time', '-entry_time'):
+            ordering = ordering.replace('entry_time', 'created_at')
+            queryset = queryset.order_by(ordering)
+        return queryset
 
     def get_serializer_class(self):
         if self.action == 'create':

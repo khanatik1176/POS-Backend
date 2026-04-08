@@ -73,7 +73,7 @@ class OrderItemInline(admin.TabularInline):
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ('customer_name', 'reference_number', 'status', 'customer_status', 'entry_time')
+    list_display = ('customer_name', 'reference_number', 'status', 'customer_status', 'created_at')
     search_fields = ('customer_name', 'url', 'reference_number')
     list_filter = ('status', 'customer_status', 'platform_type')
     inlines = [OrderItemInline]

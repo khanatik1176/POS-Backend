@@ -78,6 +78,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
+    entry_time = serializers.DateTimeField(source='created_at', read_only=True)
     items = OrderItemSerializer(many=True, read_only=True)
     platform_type_detail = PlatformTypeSerializer(source='platform_type', read_only=True)
     payment_method_detail = PaymentMethodSerializer(source='payment_method', read_only=True)
@@ -85,7 +86,7 @@ class OrderSerializer(serializers.ModelSerializer):
     status_detail = OrderStatusSerializer(source='status', read_only=True)
     customer_status_detail = CustomerStatusSerializer(source='customer_status', read_only=True)
     previous_reference_value = serializers.CharField(source='previous_reference.value', read_only=True)
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    created_by_username = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -98,10 +99,10 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['status', 'entry_time', 'verified_at', 'completed_at']
 
+    def get_created_by_username(self, obj):
+        return None
+
     def create(self, validated_data):
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            validated_data['created_by'] = request.user
         return super().create(validated_data)
 
 
@@ -119,17 +120,59 @@ class OrderCreateItemSerializer(serializers.Serializer):
 class OrderCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(max_length=255)
     url = serializers.URLField()
-    platform_type = serializers.PrimaryKeyRelatedField(queryset=PlatformType.objects.filter(is_active=True))
-    payment_method = serializers.PrimaryKeyRelatedField(queryset=PaymentMethod.objects.filter(is_active=True))
-    payment_medium = serializers.PrimaryKeyRelatedField(queryset=PaymentMedium.objects.filter(is_active=True))
+    platform_type = serializers.CharField()
+    payment_method = serializers.CharField()
+    payment_medium = serializers.CharField()
     reference_number = serializers.CharField(max_length=120)
-    customer_status = serializers.PrimaryKeyRelatedField(queryset=CustomerStatus.objects.filter(is_active=True))
+    customer_status = serializers.CharField()
     previous_reference = serializers.CharField(max_length=120, allow_blank=True, required=False)
-    items = OrderCreateItemSerializer(many=True)
+    items = OrderCreateItemSerializer(many=True, required=False)
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False)
+    package_type = serializers.PrimaryKeyRelatedField(queryset=PackageType.objects.all(), required=False)
+    quantity = serializers.IntegerField(min_value=1, required=False)
+
+    def _resolve_lookup(self, model, value, field_name):
+        value_str = str(value).strip()
+        if not value_str:
+            raise serializers.ValidationError({field_name: 'This field may not be blank.'})
+
+        queryset = model.objects.filter(is_active=True)
+        if value_str.isdigit():
+            instance = queryset.filter(pk=int(value_str)).first()
+            if instance:
+                return instance
+
+        instance = queryset.filter(code=value_str.lower()).first()
+        if instance:
+            return instance
+
+        raise serializers.ValidationError({field_name: f'Invalid value: {value}'})
 
     def validate(self, attrs):
-        if not attrs.get('items'):
-            raise serializers.ValidationError({'items': 'At least one product item is required.'})
+        attrs['platform_type'] = self._resolve_lookup(PlatformType, attrs.get('platform_type'), 'platform_type')
+        attrs['payment_method'] = self._resolve_lookup(PaymentMethod, attrs.get('payment_method'), 'payment_method')
+        attrs['payment_medium'] = self._resolve_lookup(PaymentMedium, attrs.get('payment_medium'), 'payment_medium')
+        attrs['customer_status'] = self._resolve_lookup(CustomerStatus, attrs.get('customer_status'), 'customer_status')
+
+        items = attrs.get('items')
+        if not items:
+            product = attrs.get('product')
+            package_type = attrs.get('package_type')
+            quantity = attrs.get('quantity')
+
+            if product and package_type and quantity:
+                if package_type.product_id != product.id:
+                    raise serializers.ValidationError({'package_type': 'Selected package does not belong to the selected product.'})
+
+                attrs['items'] = [
+                    {
+                        'product': product,
+                        'package_type': package_type,
+                        'quantity': quantity,
+                    }
+                ]
+            else:
+                raise serializers.ValidationError({'items': 'At least one product item is required.'})
 
         if attrs['customer_status'].code == 'renewal' and not attrs.get('previous_reference'):
             raise serializers.ValidationError({'previous_reference': 'Previous reference is required for renewal customers.'})
@@ -137,7 +180,11 @@ class OrderCreateSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
+        validated_data.pop('product', None)
+        validated_data.pop('package_type', None)
+        validated_data.pop('quantity', None)
         ordered_status = OrderStatus.objects.filter(code='ordered').first()
+        total_quantity = sum(item['quantity'] for item in items_data)
 
         reference_number = validated_data.pop('reference_number').strip()
         if not reference_number:
@@ -148,12 +195,11 @@ class OrderCreateSerializer(serializers.Serializer):
         if previous_reference_value:
             previous_reference, _ = ReferenceNumber.objects.get_or_create(value=previous_reference_value)
 
-        request = self.context.get('request')
         order = Order.objects.create(
             reference_number=reference_number,
             previous_reference=previous_reference,
             status=ordered_status,
-            created_by=request.user if request and request.user.is_authenticated else None,
+            quantity=total_quantity,
             **validated_data,
         )
 
