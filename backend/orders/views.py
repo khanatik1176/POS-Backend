@@ -6,10 +6,24 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Product, ReferenceNumber, Order
+from .models import (
+    Product,
+    ReferenceNumber,
+    PlatformType,
+    PaymentMethod,
+    PaymentMedium,
+    OrderStatus,
+    CustomerStatus,
+    Order,
+)
 from .serializers import (
     ProductSerializer,
     ReferenceNumberSerializer,
+    PlatformTypeSerializer,
+    PaymentMethodSerializer,
+    PaymentMediumSerializer,
+    OrderStatusSerializer,
+    CustomerStatusSerializer,
     OrderSerializer,
     OrderCreateSerializer,
     DeliverOrderSerializer,
@@ -34,14 +48,44 @@ class ReferenceSearchAPIView(generics.ListAPIView):
         return queryset[:20]
 
 
+class PlatformTypeListAPIView(generics.ListAPIView):
+    queryset = PlatformType.objects.filter(is_active=True).order_by('name')
+    serializer_class = PlatformTypeSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class PaymentMethodListAPIView(generics.ListAPIView):
+    queryset = PaymentMethod.objects.filter(is_active=True).order_by('name')
+    serializer_class = PaymentMethodSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class PaymentMediumListAPIView(generics.ListAPIView):
+    queryset = PaymentMedium.objects.filter(is_active=True).order_by('name')
+    serializer_class = PaymentMediumSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class OrderStatusListAPIView(generics.ListAPIView):
+    queryset = OrderStatus.objects.filter(is_active=True).order_by('name')
+    serializer_class = OrderStatusSerializer
+    permission_classes = [IsAuthenticated]
+
+
+class CustomerStatusListAPIView(generics.ListAPIView):
+    queryset = CustomerStatus.objects.filter(is_active=True).order_by('name')
+    serializer_class = CustomerStatusSerializer
+    permission_classes = [IsAuthenticated]
+
+
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.select_related(
-        'product', 'package_type', 'reference_number', 'previous_reference', 'delivered_reference', 'created_by'
-    ).all()
+        'platform_type', 'payment_method', 'payment_medium', 'status', 'customer_status', 'previous_reference', 'created_by'
+    ).prefetch_related('items__product', 'items__package_type').all()
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['status', 'product', 'customer_status']
-    search_fields = ['customer_name', 'url']
+    filterset_fields = ['status', 'customer_status', 'platform_type', 'payment_method', 'payment_medium']
+    search_fields = ['customer_name', 'url', 'reference_number']
     ordering_fields = ['entry_time']
     ordering = ['-entry_time']
 
@@ -60,9 +104,11 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
         order = self.get_object()
-        if order.status == Order.Status.COMPLETED:
+        if order.status and order.status.code == 'completed':
             return Response({'detail': 'Completed order cannot be verified again.'}, status=400)
-        order.status = Order.Status.VERIFIED
+
+        verified_status = OrderStatus.objects.filter(code='verified').first()
+        order.status = verified_status
         order.verified_at = timezone.now()
         order.save(update_fields=['status', 'verified_at', 'updated_at'])
         return Response(OrderSerializer(order).data)

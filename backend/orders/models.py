@@ -12,6 +12,19 @@ class TimeStampedModel(models.Model):
         abstract = True
 
 
+class LookupBaseModel(models.Model):
+    code = models.CharField(max_length=60, unique=True)
+    name = models.CharField(max_length=120)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        abstract = True
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class Product(models.Model):
     name = models.CharField(max_length=120, unique=True)
 
@@ -37,46 +50,33 @@ class ReferenceNumber(TimeStampedModel):
         return self.value
 
 
+class PlatformType(LookupBaseModel):
+    pass
+
+
+class PaymentMethod(LookupBaseModel):
+    pass
+
+
+class PaymentMedium(LookupBaseModel):
+    pass
+
+
+class OrderStatus(LookupBaseModel):
+    pass
+
+
+class CustomerStatus(LookupBaseModel):
+    pass
+
+
 class Order(TimeStampedModel):
-    class PlatformType(models.TextChoices):
-        FACEBOOK = 'facebook', 'Facebook'
-        INSTAGRAM = 'instagram', 'Instagram'
-        YOUTUBE = 'youtube', 'YouTube'
-        WEBSITE = 'website', 'Website'
-        TIKTOK = 'tiktok', 'TikTok'
-        OTHER = 'other', 'Other'
-
-    class PaymentMethod(models.TextChoices):
-        BKASH = 'bkash', 'bKash'
-        NAGAD = 'nagad', 'Nagad'
-        BANK = 'bank', 'Bank Transfer'
-        CARD = 'card', 'Card'
-        CASH = 'cash', 'Cash'
-
-    class PaymentMedium(models.TextChoices):
-        ONLINE = 'online', 'Online'
-        OFFLINE = 'offline', 'Offline'
-        MOBILE_BANKING = 'mobile_banking', 'Mobile Banking'
-        POS = 'pos', 'POS'
-
-    class Status(models.TextChoices):
-        ORDERED = 'ordered', 'Ordered'
-        VERIFIED = 'verified', 'Verified'
-        COMPLETED = 'completed', 'Completed'
-
-    class CustomerStatus(models.TextChoices):
-        NEW = 'new', 'New'
-        RENEWAL = 'renewal', 'Renewal'
-
     customer_name = models.CharField(max_length=255)
     url = models.URLField()
-    platform_type = models.CharField(max_length=30, choices=PlatformType.choices)
-    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='orders')
-    package_type = models.ForeignKey(PackageType, on_delete=models.PROTECT, related_name='orders')
-    quantity = models.PositiveIntegerField(default=1)
-    payment_method = models.CharField(max_length=30, choices=PaymentMethod.choices)
-    payment_medium = models.CharField(max_length=30, choices=PaymentMedium.choices)
-    reference_number = models.ForeignKey(ReferenceNumber, on_delete=models.PROTECT, related_name='primary_orders')
+    platform_type = models.ForeignKey(PlatformType, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
+    payment_method = models.ForeignKey(PaymentMethod, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
+    payment_medium = models.ForeignKey(PaymentMedium, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
+    reference_number = models.CharField(max_length=120)
     previous_reference = models.ForeignKey(
         ReferenceNumber,
         on_delete=models.SET_NULL,
@@ -84,16 +84,10 @@ class Order(TimeStampedModel):
         blank=True,
         related_name='renewal_orders',
     )
-    delivered_reference = models.ForeignKey(
-        ReferenceNumber,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='delivered_orders',
-    )
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ORDERED)
+    delivered_reference = models.CharField(max_length=120, null=True, blank=True)
+    status = models.ForeignKey(OrderStatus, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
     entry_time = models.DateTimeField(auto_now_add=True)
-    customer_status = models.CharField(max_length=20, choices=CustomerStatus.choices)
+    customer_status = models.ForeignKey(CustomerStatus, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
     verified_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -102,4 +96,17 @@ class Order(TimeStampedModel):
         ordering = ['-entry_time']
 
     def __str__(self):
-        return f'{self.customer_name} - {self.product.name}'
+        return f'{self.customer_name} - {self.reference_number}'
+
+
+class OrderItem(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='order_items')
+    package_type = models.ForeignKey(PackageType, on_delete=models.PROTECT, related_name='order_items')
+    quantity = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ['id']
+
+    def __str__(self):
+        return f'Order #{self.order_id} - {self.product.name} / {self.package_type.name}'
