@@ -45,6 +45,7 @@ ORDER_STATUSES = [
     ('ordered', 'Ordered'),
     ('verified', 'Verified'),
     ('completed', 'Completed'),
+    ('declined', 'Declined'),
 ]
 
 CUSTOMER_STATUSES = [

@@ -120,6 +120,7 @@ class OrderCreateItemSerializer(serializers.Serializer):
 class OrderCreateSerializer(serializers.Serializer):
     customer_name = serializers.CharField(max_length=255)
     url = serializers.URLField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     platform_type = serializers.CharField()
     payment_method = serializers.CharField()
     payment_medium = serializers.CharField()
@@ -179,6 +180,7 @@ class OrderCreateSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
+        validated_data.pop('amount', None)
         items_data = validated_data.pop('items')
         validated_data.pop('product', None)
         validated_data.pop('package_type', None)

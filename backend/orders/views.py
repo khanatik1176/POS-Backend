@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from django.conf import settings
 
 from .models import (
     Product,
@@ -28,6 +29,7 @@ from .serializers import (
     OrderCreateSerializer,
     DeliverOrderSerializer,
 )
+from .telegram_bot import send_order_review_message, answer_callback, edit_review_message
 
 
 class ProductListAPIView(generics.ListAPIView):
@@ -106,6 +108,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
+        amount = serializer.validated_data.get('amount')
+        send_order_review_message(order, amount=amount)
         data = OrderSerializer(order).data
         return Response(data, status=status.HTTP_201_CREATED)
 
@@ -128,3 +132,71 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
         return Response(OrderSerializer(order).data)
+
+
+class TelegramWebhookAPIView(views.APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request, *args, **kwargs):
+        secret = getattr(settings, 'TELEGRAM_WEBHOOK_SECRET', '')
+        if secret:
+            incoming_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+            if incoming_secret != secret:
+                return Response({'detail': 'Unauthorized webhook'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        callback_query = request.data.get('callback_query')
+        if not callback_query:
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        callback_id = callback_query.get('id')
+        callback_data = callback_query.get('data', '')
+
+        parts = callback_data.split('|')
+        if len(parts) != 3 or parts[0] != 'ord':
+            answer_callback(callback_id, 'Invalid action')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        _, order_id, action = parts
+        order = Order.objects.filter(pk=order_id).first()
+        if not order:
+            answer_callback(callback_id, 'Order not found')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        if action == 'verified':
+            status_obj = OrderStatus.objects.filter(code='verified').first()
+            order.status = status_obj
+            order.verified_at = timezone.now()
+            order.save(update_fields=['status', 'verified_at', 'updated_at'])
+            answer_callback(callback_id, 'Order verified')
+            result = 'Verified'
+        elif action == 'declined':
+            status_obj = OrderStatus.objects.filter(code='declined').first()
+            if not status_obj:
+                status_obj = OrderStatus.objects.filter(code='ordered').first()
+            order.status = status_obj
+            order.save(update_fields=['status', 'updated_at'])
+            answer_callback(callback_id, 'Order declined')
+            result = 'Declined'
+        else:
+            answer_callback(callback_id, 'Unknown action')
+            return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        message = callback_query.get('message', {})
+        chat_id = (message.get('chat') or {}).get('id')
+        message_id = message.get('message_id')
+        payment_medium = order.payment_medium.name if order.payment_medium else 'N/A'
+        edit_review_message(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=(
+                'Order Review Completed\n\n'
+                f'Reference No: {order.reference_number}\n'
+                f'Payment Medium: {payment_medium}\n'
+                f'Customer Name: {order.customer_name}\n'
+                f'URL: {order.url}\n'
+                f'Result: {result}'
+            ),
+        )
+
+        return Response({'ok': True}, status=status.HTTP_200_OK)
