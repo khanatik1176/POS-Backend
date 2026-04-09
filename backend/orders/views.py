@@ -1,5 +1,7 @@
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from rest_framework import generics, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -30,6 +32,23 @@ from .serializers import (
     DeliverOrderSerializer,
 )
 from .telegram_bot import send_order_review_message, answer_callback, edit_review_message
+
+
+def broadcast_order_event(event_type, order):
+    channel_layer = get_channel_layer()
+    if not channel_layer:
+        return
+
+    async_to_sync(channel_layer.group_send)(
+        'orders',
+        {
+            'type': 'order.event',
+            'data': {
+                'event': event_type,
+                'order': OrderSerializer(order).data,
+            },
+        },
+    )
 
 
 class ProductListAPIView(generics.ListAPIView):
@@ -110,6 +129,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         order = serializer.save()
         amount = serializer.validated_data.get('amount')
         send_order_review_message(order, amount=amount)
+        broadcast_order_event('created', order)
         data = OrderSerializer(order).data
         return Response(data, status=status.HTTP_201_CREATED)
 
@@ -123,6 +143,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         order.status = verified_status
         order.verified_at = timezone.now()
         order.save(update_fields=['status', 'verified_at', 'updated_at'])
+        broadcast_order_event('verified', order)
         return Response(OrderSerializer(order).data)
 
     @action(detail=True, methods=['post'])
@@ -131,6 +152,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer = DeliverOrderSerializer(data=request.data, context={'order': order})
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
+        broadcast_order_event('delivered', order)
         return Response(OrderSerializer(order).data)
 
 
@@ -198,5 +220,7 @@ class TelegramWebhookAPIView(views.APIView):
                 f'Result: {result}'
             ),
         )
+
+        broadcast_order_event(result.lower(), order)
 
         return Response({'ok': True}, status=status.HTTP_200_OK)

@@ -17,11 +17,13 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
     'rest_framework_simplejwt',
     'django_filters',
+    'channels',
+    'daphne',
+    'django.contrib.staticfiles',
     'drf_yasg',
     'orders',
 ]
@@ -56,6 +58,11 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
 
 DATABASES = {
     'default': {
