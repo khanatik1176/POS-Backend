@@ -54,7 +54,7 @@ def broadcast_order_event(event_type, order):
 class ProductListAPIView(generics.ListAPIView):
     queryset = Product.objects.prefetch_related('packages').all().order_by('name')
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
 
 class ReferenceSearchAPIView(generics.ListAPIView):
