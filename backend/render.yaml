@@ -11,6 +11,8 @@ services:
     envVars:
       - key: DEBUG
         value: "False"
+      - key: PYTHON_VERSION
+        value: "3.12.10"
       - key: DJANGO_SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
