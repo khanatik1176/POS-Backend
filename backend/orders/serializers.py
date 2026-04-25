@@ -1,3 +1,5 @@
+import uuid
+
 from django.utils import timezone
 from rest_framework import serializers
 from .models import (
@@ -16,13 +18,20 @@ from .models import (
 
 class ProductSerializer(serializers.ModelSerializer):
     packages = serializers.SerializerMethodField()
+    platform_types = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'packages']
+        fields = ['id', 'name', 'platform_types', 'packages']
 
     def get_packages(self, obj):
         return [{'id': package.id, 'name': package.name} for package in obj.packages.all().order_by('name')]
+
+    def get_platform_types(self, obj):
+        return [
+            {'id': platform.id, 'code': platform.code, 'name': platform.name}
+            for platform in obj.platform_types.all().order_by('name')
+        ]
 
 
 class ReferenceNumberSerializer(serializers.ModelSerializer):
@@ -124,7 +133,7 @@ class OrderCreateSerializer(serializers.Serializer):
     platform_type = serializers.CharField()
     payment_method = serializers.CharField()
     payment_medium = serializers.CharField()
-    reference_number = serializers.CharField(max_length=120)
+    reference_number = serializers.CharField(max_length=120, required=False, allow_blank=True, allow_null=True)
     customer_status = serializers.CharField()
     previous_reference = serializers.CharField(max_length=120, allow_blank=True, required=False)
     items = OrderCreateItemSerializer(many=True, required=False)
@@ -155,6 +164,11 @@ class OrderCreateSerializer(serializers.Serializer):
         attrs['payment_medium'] = self._resolve_lookup(PaymentMedium, attrs.get('payment_medium'), 'payment_medium')
         attrs['customer_status'] = self._resolve_lookup(CustomerStatus, attrs.get('customer_status'), 'customer_status')
 
+        def validate_product_platform(product):
+            allowed_platforms = product.platform_types.all()
+            if allowed_platforms.exists() and not allowed_platforms.filter(pk=attrs['platform_type'].pk).exists():
+                raise serializers.ValidationError({'product': 'Selected product is not available for the selected platform.'})
+
         items = attrs.get('items')
         if not items:
             product = attrs.get('product')
@@ -165,6 +179,8 @@ class OrderCreateSerializer(serializers.Serializer):
                 if package_type.product_id != product.id:
                     raise serializers.ValidationError({'package_type': 'Selected package does not belong to the selected product.'})
 
+                validate_product_platform(product)
+
                 attrs['items'] = [
                     {
                         'product': product,
@@ -174,10 +190,26 @@ class OrderCreateSerializer(serializers.Serializer):
                 ]
             else:
                 raise serializers.ValidationError({'items': 'At least one product item is required.'})
+        else:
+            for item in items:
+                validate_product_platform(item['product'])
 
         if attrs['customer_status'].code == 'renewal' and not attrs.get('previous_reference'):
             raise serializers.ValidationError({'previous_reference': 'Previous reference is required for renewal customers.'})
         return attrs
+
+    def _build_reference_number(self, data):
+        reference_number = data.get('reference_number')
+        if isinstance(reference_number, str):
+            reference_number = reference_number.strip()
+
+        if reference_number:
+            return reference_number
+
+        while True:
+            generated = f'ORD-{timezone.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}'
+            if not Order.objects.filter(reference_number=generated).exists() and not ReferenceNumber.objects.filter(value=generated).exists():
+                return generated
 
     def create(self, validated_data):
         validated_data.pop('amount', None)
@@ -188,9 +220,9 @@ class OrderCreateSerializer(serializers.Serializer):
         ordered_status = OrderStatus.objects.filter(code='ordered').first()
         total_quantity = sum(item['quantity'] for item in items_data)
 
-        reference_number = validated_data.pop('reference_number').strip()
-        if not reference_number:
-            raise serializers.ValidationError({'reference_number': 'Reference number cannot be empty.'})
+        reference_number = self._build_reference_number(validated_data)
+        ReferenceNumber.objects.get_or_create(value=reference_number)
+        validated_data.pop('reference_number', None)
 
         previous_reference_value = validated_data.pop('previous_reference', '').strip()
         previous_reference = None
@@ -225,6 +257,7 @@ class DeliverOrderSerializer(serializers.Serializer):
     def save(self, **kwargs):
         order = self.context['order']
         reference_value = self.validated_data['delivered_reference'].strip()
+        ReferenceNumber.objects.get_or_create(value=reference_value)
         completed_status = OrderStatus.objects.filter(code='completed').first()
 
         order.delivered_reference = reference_value

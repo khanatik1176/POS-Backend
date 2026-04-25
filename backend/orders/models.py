@@ -27,6 +27,11 @@ class LookupBaseModel(models.Model):
 
 class Product(models.Model):
     name = models.CharField(max_length=120, unique=True)
+    platform_types = models.ManyToManyField(
+        'PlatformType',
+        related_name='products',
+        blank=True,
+    )
 
     def __str__(self):
         return self.name

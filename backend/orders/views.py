@@ -52,9 +52,19 @@ def broadcast_order_event(event_type, order):
 
 
 class ProductListAPIView(generics.ListAPIView):
-    queryset = Product.objects.prefetch_related('packages').all().order_by('name')
     serializer_class = ProductSerializer
     permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        queryset = Product.objects.prefetch_related('packages', 'platform_types').all().order_by('name')
+        platform_type = self.request.query_params.get('platform_type', '').strip()
+        if not platform_type:
+            return queryset
+
+        if platform_type.isdigit():
+            return queryset.filter(platform_types__id=int(platform_type)).distinct()
+
+        return queryset.filter(platform_types__code=platform_type.lower()).distinct()
 
 
 class ReferenceSearchAPIView(generics.ListAPIView):

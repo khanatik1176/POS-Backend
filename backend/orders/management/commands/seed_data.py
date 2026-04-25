@@ -58,6 +58,12 @@ class Command(BaseCommand):
     help = 'Seed initial products, packages, and an admin user.'
 
     def handle(self, *args, **options):
+        platform_type_map = {
+            'Facebook Boost': ['facebook'],
+            'YouTube Watch Time': ['youtube'],
+            'Instagram Growth': ['instagram'],
+        }
+
         for product_name, packages in SEED_PRODUCTS.items():
             product, _ = Product.objects.get_or_create(name=product_name)
             for package_name in packages:
@@ -65,6 +71,13 @@ class Command(BaseCommand):
 
         for code, name in PLATFORM_TYPES:
             PlatformType.objects.get_or_create(code=code, defaults={'name': name})
+
+        for product_name, platform_codes in platform_type_map.items():
+            product = Product.objects.filter(name=product_name).first()
+            if not product:
+                continue
+            platform_types = PlatformType.objects.filter(code__in=platform_codes)
+            product.platform_types.set(platform_types)
 
         for code, name in PAYMENT_METHODS:
             PaymentMethod.objects.get_or_create(code=code, defaults={'name': name})

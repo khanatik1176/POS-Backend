@@ -20,9 +20,15 @@ class PackageTypeInline(admin.TabularInline):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name',)
+    list_display = ('name', 'platform_type_names')
     search_fields = ('name',)
     inlines = [PackageTypeInline]
+    filter_horizontal = ('platform_types',)
+
+    def platform_type_names(self, obj):
+        return ', '.join(obj.platform_types.values_list('name', flat=True)) or '-'
+
+    platform_type_names.short_description = 'Platform types'
 
 
 @admin.register(ReferenceNumber)
