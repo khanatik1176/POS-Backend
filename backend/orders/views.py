@@ -62,14 +62,25 @@ class ProductListAPIView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = Product.objects.prefetch_related('packages', 'platform_types').all().order_by('name')
-        platform_type = self.request.query_params.get('platform_type', '').strip()
+
+        raw_platform = (
+            self.request.query_params.get('platform_type')
+            or self.request.query_params.get('platformType')
+            or self.request.query_params.get('platform')
+            or self.request.query_params.get('platform_code')
+            or self.request.query_params.get('platformCode')
+            or ''
+        )
+        platform_type = str(raw_platform).strip()
         if not platform_type:
-            return queryset
+            return queryset.none()
 
         if platform_type.isdigit():
             return queryset.filter(platform_types__id=int(platform_type)).distinct()
 
-        return queryset.filter(platform_types__code=platform_type.lower()).distinct()
+        return queryset.filter(
+            platform_types__code=platform_type.lower(),
+        ).distinct()
 
 
 class ReferenceSearchAPIView(generics.ListAPIView):
