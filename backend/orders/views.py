@@ -2,6 +2,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import generics, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -133,6 +134,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             return OrderCreateSerializer
         return OrderSerializer
 
+    @swagger_auto_schema(request_body=OrderCreateSerializer, responses={201: OrderSerializer})
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
@@ -143,6 +145,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         data = OrderSerializer(order).data
         return Response(data, status=status.HTTP_201_CREATED)
 
+    @swagger_auto_schema(request_body=None, responses={200: OrderSerializer})
     @action(detail=True, methods=['post'])
     def verify(self, request, pk=None):
         order = self.get_object()
@@ -156,6 +159,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         broadcast_order_event('verified', order)
         return Response(OrderSerializer(order).data)
 
+    @swagger_auto_schema(request_body=DeliverOrderSerializer, responses={200: OrderSerializer})
     @action(detail=True, methods=['post'])
     def deliver(self, request, pk=None):
         order = self.get_object()
