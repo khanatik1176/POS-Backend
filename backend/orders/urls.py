@@ -17,6 +17,7 @@ router.register('orders', OrderViewSet, basename='orders')
 
 urlpatterns = [
     path('products/', ProductListAPIView.as_view(), name='products'),
+    path('lookups/products/', ProductListAPIView.as_view(), name='lookup-products'),
     path('references/', ReferenceSearchAPIView.as_view(), name='reference-search'),
     path('lookups/platform-types/', PlatformTypeListAPIView.as_view(), name='platform-types'),
     path('lookups/payment-methods/', PaymentMethodListAPIView.as_view(), name='payment-methods'),
