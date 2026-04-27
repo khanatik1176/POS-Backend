@@ -252,13 +252,27 @@ class OrderCreateSerializer(serializers.Serializer):
 
 
 class DeliverOrderSerializer(serializers.Serializer):
-    delivered_reference = serializers.CharField(max_length=120)
+    delivered_reference = serializers.CharField(max_length=120, required=False, allow_blank=False)
+
+    def validate(self, attrs):
+        reference_value = attrs.get('delivered_reference')
+        if reference_value in (None, ''):
+            reference_value = self.initial_data.get('deliveredReference')
+
+        if reference_value in (None, '') or not str(reference_value).strip():
+            raise serializers.ValidationError({'delivered_reference': 'This field is required.'})
+
+        attrs['delivered_reference'] = str(reference_value).strip()
+        return attrs
 
     def save(self, **kwargs):
         order = self.context['order']
-        reference_value = self.validated_data['delivered_reference'].strip()
+        reference_value = self.validated_data['delivered_reference']
         ReferenceNumber.objects.get_or_create(value=reference_value)
-        completed_status = OrderStatus.objects.filter(code='completed').first()
+        completed_status, _ = OrderStatus.objects.get_or_create(
+            code='completed',
+            defaults={'name': 'Completed', 'is_active': True},
+        )
 
         order.delivered_reference = reference_value
         order.status = completed_status

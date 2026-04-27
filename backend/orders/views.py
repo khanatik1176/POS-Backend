@@ -3,6 +3,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from drf_yasg.utils import swagger_auto_schema
+import logging
 from rest_framework import generics, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -33,6 +34,9 @@ from .serializers import (
     DeliverOrderSerializer,
 )
 from .telegram_bot import send_order_review_message, answer_callback, edit_review_message
+
+
+logger = logging.getLogger(__name__)
 
 
 def broadcast_order_event(event_type, order):
@@ -145,22 +149,29 @@ class OrderViewSet(viewsets.ModelViewSet):
         data = OrderSerializer(order).data
         return Response(data, status=status.HTTP_201_CREATED)
 
-    @swagger_auto_schema(request_body=None, responses={200: OrderSerializer})
-    @action(detail=True, methods=['post'])
+    def _resolve_status(self, code, fallback_name):
+        status_obj = OrderStatus.objects.filter(code=code).first()
+        if status_obj:
+            return status_obj
+        status_obj, _ = OrderStatus.objects.get_or_create(code=code, defaults={'name': fallback_name, 'is_active': True})
+        return status_obj
+
+    @swagger_auto_schema(methods=['post', 'patch'], request_body=None, responses={200: OrderSerializer})
+    @action(detail=True, methods=['post', 'patch'])
     def verify(self, request, pk=None):
         order = self.get_object()
         if order.status and order.status.code == 'completed':
             return Response({'detail': 'Completed order cannot be verified again.'}, status=400)
 
-        verified_status = OrderStatus.objects.filter(code='verified').first()
+        verified_status = self._resolve_status('verified', 'Verified')
         order.status = verified_status
         order.verified_at = timezone.now()
         order.save(update_fields=['status', 'verified_at', 'updated_at'])
         broadcast_order_event('verified', order)
         return Response(OrderSerializer(order).data)
 
-    @swagger_auto_schema(request_body=DeliverOrderSerializer, responses={200: OrderSerializer})
-    @action(detail=True, methods=['post'])
+    @swagger_auto_schema(methods=['post', 'patch'], request_body=DeliverOrderSerializer, responses={200: OrderSerializer})
+    @action(detail=True, methods=['post', 'patch'])
     def deliver(self, request, pk=None):
         order = self.get_object()
         serializer = DeliverOrderSerializer(data=request.data, context={'order': order})
@@ -174,11 +185,19 @@ class TelegramWebhookAPIView(views.APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
+    def _resolve_status(self, code, fallback_name):
+        status_obj = OrderStatus.objects.filter(code=code).first()
+        if status_obj:
+            return status_obj
+        status_obj, _ = OrderStatus.objects.get_or_create(code=code, defaults={'name': fallback_name, 'is_active': True})
+        return status_obj
+
     def post(self, request, *args, **kwargs):
         secret = getattr(settings, 'TELEGRAM_WEBHOOK_SECRET', '')
         if secret:
             incoming_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
             if incoming_secret != secret:
+                logger.warning('Telegram webhook unauthorized: secret header mismatch')
                 return Response({'detail': 'Unauthorized webhook'}, status=status.HTTP_401_UNAUTHORIZED)
 
         callback_query = request.data.get('callback_query')
@@ -190,33 +209,38 @@ class TelegramWebhookAPIView(views.APIView):
 
         parts = callback_data.split('|')
         if len(parts) != 3 or parts[0] != 'ord':
+            logger.warning('Telegram callback ignored due to invalid callback_data: %s', callback_data)
             answer_callback(callback_id, 'Invalid action')
             return Response({'ok': True}, status=status.HTTP_200_OK)
 
         _, order_id, action = parts
         order = Order.objects.filter(pk=order_id).first()
         if not order:
+            logger.warning('Telegram callback order not found for id=%s', order_id)
             answer_callback(callback_id, 'Order not found')
             return Response({'ok': True}, status=status.HTTP_200_OK)
 
-        if action == 'verified':
-            status_obj = OrderStatus.objects.filter(code='verified').first()
+        normalized_action = (action or '').strip().lower()
+
+        if normalized_action in ('verify', 'verified'):
+            status_obj = self._resolve_status('verified', 'Verified')
             order.status = status_obj
             order.verified_at = timezone.now()
             order.save(update_fields=['status', 'verified_at', 'updated_at'])
             answer_callback(callback_id, 'Order verified')
             result = 'Verified'
-        elif action == 'declined':
-            status_obj = OrderStatus.objects.filter(code='declined').first()
-            if not status_obj:
-                status_obj = OrderStatus.objects.filter(code='ordered').first()
+        elif normalized_action in ('decline', 'declined'):
+            status_obj = self._resolve_status('declined', 'Declined')
             order.status = status_obj
             order.save(update_fields=['status', 'updated_at'])
             answer_callback(callback_id, 'Order declined')
             result = 'Declined'
         else:
+            logger.warning('Telegram callback unknown action="%s" for order id=%s', action, order_id)
             answer_callback(callback_id, 'Unknown action')
             return Response({'ok': True}, status=status.HTTP_200_OK)
+
+        logger.info('Telegram callback processed: action=%s order_id=%s status=%s', normalized_action, order_id, status_obj.code)
 
         message = callback_query.get('message', {})
         chat_id = (message.get('chat') or {}).get('id')
