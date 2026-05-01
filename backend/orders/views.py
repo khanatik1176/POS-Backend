@@ -96,7 +96,7 @@ class ReferenceSearchAPIView(generics.ListAPIView):
 
 
 class PlatformTypeListAPIView(generics.ListAPIView):
-    queryset = PlatformType.objects.filter(is_active=True).order_by('name')
+    queryset = PlatformType.objects.filter(is_active=True).prefetch_related('products__packages').order_by('name')
     serializer_class = PlatformTypeSerializer
     permission_classes = [AllowAny]
 

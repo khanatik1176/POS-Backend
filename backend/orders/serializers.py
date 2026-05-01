@@ -34,6 +34,17 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
 
+class ProductForPlatformSerializer(serializers.ModelSerializer):
+    packages = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'packages']
+
+    def get_packages(self, obj):
+        return [{'id': package.id, 'name': package.name} for package in obj.packages.all().order_by('name')]
+
+
 class ReferenceNumberSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReferenceNumber
@@ -46,8 +57,11 @@ class LookupSerializer(serializers.ModelSerializer):
 
 
 class PlatformTypeSerializer(LookupSerializer):
+    products = ProductForPlatformSerializer(many=True, read_only=True, source='products')
+
     class Meta(LookupSerializer.Meta):
         model = PlatformType
+        fields = ['id', 'code', 'name', 'products']
 
 
 class PaymentMethodSerializer(LookupSerializer):
