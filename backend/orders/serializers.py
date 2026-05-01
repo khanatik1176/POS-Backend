@@ -57,11 +57,14 @@ class LookupSerializer(serializers.ModelSerializer):
 
 
 class PlatformTypeSerializer(LookupSerializer):
-    products = ProductForPlatformSerializer(many=True, read_only=True, source='products')
+    products = serializers.SerializerMethodField()
 
     class Meta(LookupSerializer.Meta):
         model = PlatformType
         fields = ['id', 'code', 'name', 'products']
+
+    def get_products(self, obj):
+        return ProductForPlatformSerializer(obj.products.all(), many=True).data
 
 
 class PaymentMethodSerializer(LookupSerializer):
