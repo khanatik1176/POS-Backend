@@ -73,7 +73,7 @@ class ProductListAPIView(generics.ListAPIView):
         )
         platform_type = str(raw_platform).strip()
         if not platform_type:
-            return queryset.none()
+            return queryset
 
         if platform_type.isdigit():
             return queryset.filter(platform_types__id=int(platform_type)).distinct()
