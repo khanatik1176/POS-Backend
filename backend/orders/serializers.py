@@ -134,12 +134,25 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderCreateItemSerializer(serializers.Serializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
-    package_type = serializers.PrimaryKeyRelatedField(queryset=PackageType.objects.all())
-    quantity = serializers.IntegerField(min_value=1)
+    package_types = serializers.PrimaryKeyRelatedField(
+        queryset=PackageType.objects.all(),
+        many=True,
+        help_text='Array of package type IDs to include with this product'
+    )
+    quantity = serializers.IntegerField(min_value=1, default=1, help_text='Quantity per package')
 
     def validate(self, attrs):
-        if attrs['package_type'].product_id != attrs['product'].id:
-            raise serializers.ValidationError({'package_type': 'Selected package does not belong to the selected product.'})
+        product = attrs.get('product')
+        package_types = attrs.get('package_types', [])
+        
+        if not package_types:
+            raise serializers.ValidationError({'package_types': 'At least one package type is required.'})
+        
+        for package_type in package_types:
+            if package_type.product_id != product.id:
+                raise serializers.ValidationError(
+                    {'package_types': f'Package "{package_type.name}" does not belong to product "{product.name}".'}
+                )
         return attrs
 
 
@@ -154,8 +167,15 @@ class OrderCreateSerializer(serializers.Serializer):
     customer_status = serializers.CharField()
     previous_reference = serializers.CharField(max_length=120, allow_blank=True, required=False)
     items = OrderCreateItemSerializer(many=True, required=False)
+    # Legacy support: single product/package_type
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False)
     package_type = serializers.PrimaryKeyRelatedField(queryset=PackageType.objects.all(), required=False)
+    package_types = serializers.PrimaryKeyRelatedField(
+        queryset=PackageType.objects.all(),
+        many=True,
+        required=False,
+        help_text='Array of package type IDs for the single product'
+    )
     quantity = serializers.IntegerField(min_value=1, required=False)
 
     def _resolve_lookup(self, model, value, field_name):
@@ -189,24 +209,35 @@ class OrderCreateSerializer(serializers.Serializer):
         items = attrs.get('items')
         if not items:
             product = attrs.get('product')
+            package_types = attrs.get('package_types', [])
             package_type = attrs.get('package_type')
-            quantity = attrs.get('quantity')
+            quantity = attrs.get('quantity', 1)
 
-            if product and package_type and quantity:
-                if package_type.product_id != product.id:
-                    raise serializers.ValidationError({'package_type': 'Selected package does not belong to the selected product.'})
+            # Legacy support: single package_type field
+            if package_type and not package_types:
+                package_types = [package_type]
+
+            if product and package_types and quantity:
+                # Validate all packages belong to product
+                for pt in package_types:
+                    if pt.product_id != product.id:
+                        raise serializers.ValidationError(
+                            {'package_types': f'Package "{pt.name}" does not belong to product "{product.name}".'}
+                        )
 
                 validate_product_platform(product)
 
+                # Create one item per package (expanded view)
                 attrs['items'] = [
                     {
                         'product': product,
-                        'package_type': package_type,
+                        'package_types': [pt],  # Single package per item entry
                         'quantity': quantity,
                     }
+                    for pt in package_types
                 ]
             else:
-                raise serializers.ValidationError({'items': 'At least one product item is required.'})
+                raise serializers.ValidationError({'items': 'At least one product with packages is required.'})
         else:
             for item in items:
                 validate_product_platform(item['product'])
@@ -233,9 +264,26 @@ class OrderCreateSerializer(serializers.Serializer):
         items_data = validated_data.pop('items')
         validated_data.pop('product', None)
         validated_data.pop('package_type', None)
+        validated_data.pop('package_types', None)
         validated_data.pop('quantity', None)
         ordered_status = OrderStatus.objects.filter(code='ordered').first()
-        total_quantity = sum(item['quantity'] for item in items_data)
+
+        # Flatten all packages from items and calculate total quantity
+        order_items_to_create = []
+        total_quantity = 0
+        
+        for item in items_data:
+            product = item['product']
+            package_types = item.get('package_types', [])
+            quantity = item.get('quantity', 1)
+            
+            for package_type in package_types:
+                order_items_to_create.append({
+                    'product': product,
+                    'package_type': package_type,
+                    'quantity': quantity,
+                })
+                total_quantity += quantity
 
         reference_number = self._build_reference_number(validated_data)
         ReferenceNumber.objects.get_or_create(value=reference_number)
@@ -254,17 +302,15 @@ class OrderCreateSerializer(serializers.Serializer):
             **validated_data,
         )
 
-        OrderItem.objects.bulk_create(
-            [
-                OrderItem(
-                    order=order,
-                    product=item['product'],
-                    package_type=item['package_type'],
-                    quantity=item['quantity'],
-                )
-                for item in items_data
-            ]
-        )
+        OrderItem.objects.bulk_create([
+            OrderItem(
+                order=order,
+                product=item['product'],
+                package_type=item['package_type'],
+                quantity=item['quantity'],
+            )
+            for item in order_items_to_create
+        ])
         return order
 
 
