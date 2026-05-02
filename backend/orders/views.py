@@ -308,6 +308,10 @@ class TelegramWebhookSetupAPIView(views.APIView):
                 'status': 'error',
                 'message': str(e),
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class TelegramWebhookAPIView(views.APIView):
+    """Receive and process Telegram callback queries"""
     permission_classes = [AllowAny]
     authentication_classes = []
 
