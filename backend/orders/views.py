@@ -4,6 +4,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from drf_yasg.utils import swagger_auto_schema
 import logging
+import threading
 from rest_framework import generics, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -192,7 +193,121 @@ class OrderViewSet(viewsets.ModelViewSet):
         return Response(OrderSerializer(order).data)
 
 
-class TelegramWebhookAPIView(views.APIView):
+class TelegramWebhookSetupAPIView(views.APIView):
+    """Setup/verify Telegram webhook without needing shell access"""
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def _call_telegram_api(self, method, payload=None):
+        """Call Telegram Bot API"""
+        token = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
+        if not token:
+            raise Exception('TELEGRAM_BOT_TOKEN not set')
+
+        import json
+        from urllib import request as url_request
+        
+        api_url = f'https://api.telegram.org/bot{token}/{method}'
+        req = url_request.Request(
+            api_url,
+            data=json.dumps(payload or {}).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with url_request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode('utf-8')
+            return json.loads(body)
+
+    def post(self, request):
+        """Register webhook: POST /api/telegram/setup/?webhook_url=https://..."""
+        webhook_url = request.query_params.get('webhook_url') or request.data.get('webhook_url')
+        
+        if not webhook_url:
+            return Response(
+                {'error': 'webhook_url parameter required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            secret = getattr(settings, 'TELEGRAM_WEBHOOK_SECRET', '')
+            response = self._call_telegram_api('setWebhook', {
+                'url': webhook_url,
+                'secret_token': secret,
+                'allowed_updates': ['callback_query', 'message'],
+            })
+
+            if response.get('ok'):
+                return Response({
+                    'status': 'success',
+                    'message': 'Webhook registered successfully',
+                    'url': webhook_url,
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    'status': 'error',
+                    'message': response.get('description', 'Unknown error'),
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': str(e),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def get(self, request):
+        """Check webhook status: GET /api/telegram/setup/"""
+        try:
+            response = self._call_telegram_api('getWebhookInfo')
+            
+            if not response.get('ok'):
+                return Response({
+                    'status': 'error',
+                    'message': response.get('description'),
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            info = response.get('result', {})
+            webhook_url = info.get('url')
+            pending_count = info.get('pending_update_count', 0)
+            last_error_date = info.get('last_error_date')
+            last_error_msg = info.get('last_error_message')
+
+            return Response({
+                'status': 'success',
+                'webhook': {
+                    'url': webhook_url or None,
+                    'is_set': bool(webhook_url),
+                    'pending_updates': pending_count,
+                    'last_error': {
+                        'date': last_error_date,
+                        'message': last_error_msg,
+                    } if last_error_date else None,
+                }
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': str(e),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def delete(self, request):
+        """Remove webhook: DELETE /api/telegram/setup/"""
+        try:
+            response = self._call_telegram_api('deleteWebhook')
+            
+            if response.get('ok'):
+                return Response({
+                    'status': 'success',
+                    'message': 'Webhook removed',
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    'status': 'error',
+                    'message': response.get('description'),
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': str(e),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     permission_classes = [AllowAny]
     authentication_classes = []
 
@@ -203,13 +318,66 @@ class TelegramWebhookAPIView(views.APIView):
         status_obj, _ = OrderStatus.objects.get_or_create(code=code, defaults={'name': fallback_name, 'is_active': True})
         return status_obj
 
+    def _process_callback(self, callback_query, callback_id, order_id, action):
+        """Heavy lifting done in background thread"""
+        try:
+            order = Order.objects.filter(pk=order_id).first()
+            if not order:
+                logger.warning('Telegram callback order not found for id=%s', order_id)
+                answer_callback(callback_id, 'Order not found')
+                return
+
+            normalized_action = (action or '').strip().lower()
+
+            if normalized_action in ('verify', 'verified'):
+                status_obj = self._resolve_status('verified', 'Verified')
+                order.status = status_obj
+                order.verified_at = timezone.now()
+                order.save(update_fields=['status', 'verified_at', 'updated_at'])
+                answer_callback(callback_id, 'Order verified')
+                result = 'Verified'
+            elif normalized_action in ('decline', 'declined'):
+                status_obj = self._resolve_status('declined', 'Declined')
+                order.status = status_obj
+                order.save(update_fields=['status', 'updated_at'])
+                answer_callback(callback_id, 'Order declined')
+                result = 'Declined'
+            else:
+                logger.warning('Telegram callback unknown action="%s" for order id=%s', action, order_id)
+                answer_callback(callback_id, 'Unknown action')
+                return
+
+            logger.info('Telegram callback processed: action=%s order_id=%s status=%s', normalized_action, order_id, status_obj.code)
+
+            message = callback_query.get('message', {})
+            chat_id = (message.get('chat') or {}).get('id')
+            message_id = message.get('message_id')
+            payment_medium = order.payment_medium.name if order.payment_medium else 'N/A'
+            edit_review_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=(
+                    'Order Review Completed\n\n'
+                    f'Reference No: {order.reference_number}\n'
+                    f'Payment Medium: {payment_medium}\n'
+                    f'Customer Name: {order.customer_name}\n'
+                    f'URL: {order.url}\n'
+                    f'Result: {result}'
+                ),
+            )
+
+            broadcast_order_event(result.lower(), order)
+        except Exception as e:
+            logger.exception('Error processing Telegram callback: %s', e)
+            answer_callback(callback_id, 'Error processing request')
+
     def post(self, request, *args, **kwargs):
         secret = getattr(settings, 'TELEGRAM_WEBHOOK_SECRET', '')
         if secret:
             incoming_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
             if incoming_secret != secret:
                 logger.warning('Telegram webhook unauthorized: secret header mismatch')
-                return Response({'detail': 'Unauthorized webhook'}, status=status.HTTP_401_UNAUTHORIZED)
+                return Response({'ok': True}, status=status.HTTP_200_OK)
 
         callback_query = request.data.get('callback_query')
         if not callback_query:
@@ -225,51 +393,14 @@ class TelegramWebhookAPIView(views.APIView):
             return Response({'ok': True}, status=status.HTTP_200_OK)
 
         _, order_id, action = parts
-        order = Order.objects.filter(pk=order_id).first()
-        if not order:
-            logger.warning('Telegram callback order not found for id=%s', order_id)
-            answer_callback(callback_id, 'Order not found')
-            return Response({'ok': True}, status=status.HTTP_200_OK)
 
-        normalized_action = (action or '').strip().lower()
-
-        if normalized_action in ('verify', 'verified'):
-            status_obj = self._resolve_status('verified', 'Verified')
-            order.status = status_obj
-            order.verified_at = timezone.now()
-            order.save(update_fields=['status', 'verified_at', 'updated_at'])
-            answer_callback(callback_id, 'Order verified')
-            result = 'Verified'
-        elif normalized_action in ('decline', 'declined'):
-            status_obj = self._resolve_status('declined', 'Declined')
-            order.status = status_obj
-            order.save(update_fields=['status', 'updated_at'])
-            answer_callback(callback_id, 'Order declined')
-            result = 'Declined'
-        else:
-            logger.warning('Telegram callback unknown action="%s" for order id=%s', action, order_id)
-            answer_callback(callback_id, 'Unknown action')
-            return Response({'ok': True}, status=status.HTTP_200_OK)
-
-        logger.info('Telegram callback processed: action=%s order_id=%s status=%s', normalized_action, order_id, status_obj.code)
-
-        message = callback_query.get('message', {})
-        chat_id = (message.get('chat') or {}).get('id')
-        message_id = message.get('message_id')
-        payment_medium = order.payment_medium.name if order.payment_medium else 'N/A'
-        edit_review_message(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=(
-                'Order Review Completed\n\n'
-                f'Reference No: {order.reference_number}\n'
-                f'Payment Medium: {payment_medium}\n'
-                f'Customer Name: {order.customer_name}\n'
-                f'URL: {order.url}\n'
-                f'Result: {result}'
-            ),
+        # Return immediately to Telegram (critical - prevents timeout)
+        # Process the callback in background thread
+        thread = threading.Thread(
+            target=self._process_callback,
+            args=(callback_query, callback_id, order_id, action),
+            daemon=True,
         )
-
-        broadcast_order_event(result.lower(), order)
+        thread.start()
 
         return Response({'ok': True}, status=status.HTTP_200_OK)
