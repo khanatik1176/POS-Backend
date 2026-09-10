@@ -11,3 +11,5 @@ python-dotenv==1.0.1
 drf-yasg==1.21.15
 channels==4.3.2
 daphne==4.2.1
+pytesseract==0.3.13
+Pillow==11.0.0

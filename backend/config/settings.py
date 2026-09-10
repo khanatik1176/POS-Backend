@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'drf_yasg',
     'orders',
+    'invoices',
+    'accounts',
 ]
 
 MIDDLEWARE = [
@@ -58,6 +60,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'accounts.middleware.AuditLogMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -121,6 +124,8 @@ STORAGES = {
     },
 }
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+OCR_CONFIDENCE_THRESHOLD = float(os.getenv('OCR_CONFIDENCE_THRESHOLD', '70'))
 
 CORS_ALLOW_ALL_ORIGINS = env_bool('CORS_ALLOW_ALL_ORIGINS', default=DEBUG)
 CORS_ALLOW_CREDENTIALS = True

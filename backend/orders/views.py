@@ -9,6 +9,7 @@ from rest_framework import generics, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from accounts.permissions import require_action
 from rest_framework.response import Response
 from django.conf import settings
 
@@ -136,6 +137,15 @@ class OrderViewSet(viewsets.ModelViewSet):
     search_fields = ['customer_name', 'url', 'reference_number']
     ordering_fields = ['created_at']
     ordering = ['-created_at']
+
+    def get_permissions(self):
+        action_by_method = {
+            'create': 'orders.create',
+            'verify': 'orders.verify',
+            'deliver': 'orders.deliver',
+        }
+        action_key = action_by_method.get(self.action, 'orders.view')
+        return [IsAuthenticated(), require_action(action_key)()]
 
     def get_queryset(self):
         queryset = super().get_queryset()
