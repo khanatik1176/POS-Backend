@@ -25,24 +25,24 @@ CONFIDENCE_THRESHOLD = getattr(settings, 'OCR_CONFIDENCE_THRESHOLD', 70)
 OCR_LANGUAGES = 'eng+ben'
 
 OCR_MIN_DIMENSION = 1600
-OCR_MAX_UPSCALE = 2
+OCR_MAX_UPSCALE = 3
 
 
 def _prepare_image_for_ocr(image):
-    """Upscale + grayscale small phone screenshots for clearer TrxID glyphs."""
-    from PIL import Image, ImageOps
+    """Upscale + grayscale + contrast for clearer Bengali labels / TrxID glyphs."""
+    from PIL import Image, ImageEnhance, ImageOps
 
     image = image.convert('RGB')
     max_dim = max(image.size)
     if max_dim < OCR_MIN_DIMENSION:
         scale = min(OCR_MAX_UPSCALE, OCR_MIN_DIMENSION / max_dim)
-        # Keep at least 2x for typical ~500–1100px receipt screenshots.
-        scale = max(scale, 2.0) if max_dim < 1200 else scale
         image = image.resize(
             (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
             Image.Resampling.LANCZOS,
         )
-    return ImageOps.grayscale(image)
+    gray = ImageOps.grayscale(image)
+    # Bengali UI glyphs on phone screenshots benefit from a mild contrast boost.
+    return ImageEnhance.Contrast(gray).enhance(1.8)
 
 
 def _lines_from_pil_image(image):

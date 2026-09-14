@@ -91,6 +91,60 @@ class MobileMoneyFieldMappingTests(TestCase):
         self.assertEqual(result['transaction_id']['value'], 'DHJ4LVGD1C')
         self.assertGreaterEqual(result['transaction_id']['confidence'], 92)
 
+    def test_garbled_bengali_labels_and_junk_line(self):
+        # Real Tesseract often softens "আইডি" / "পরিমাণ" and inserts junk
+        # between a Bangla label and its stacked value.
+        lines = [
+            {'text': 'ট্রানজেকসন আইদ', 'confidence': 70},
+            {'text': '|', 'confidence': 20},
+            {'text': 'DHJ4LVGD1C', 'confidence': 88},
+            {'text': 'পরিমান', 'confidence': 65},
+            {'text': '৳480.00', 'confidence': 80},
+            {'text': 'রেফারেনস', 'confidence': 60},
+            {'text': 'Nafisha', 'confidence': 82},
+        ]
+        result = extract_mobile_money_fields(lines)
+        self.assertEqual(result['transaction_id']['value'], 'DHJ4LVGD1C')
+        self.assertEqual(result['amount']['value'], '480.00')
+        self.assertEqual(result['reference_name']['value'], 'Nafisha')
+
+    def test_bangla_popup_ocr_fixes_taka_glued_charge_and_trx_id(self):
+        # Real eng+ben OCR of the Bangla bottom sheet:
+        # ৳480.00 → 6480.00, ৳5.00 → 65.00, and TrxID lands under the labels.
+        lines = [
+            'একাউন্ট সময়', '01966033384 11:49am 09/07/26',
+            'পরিমাণ চার্জ', '6480.00 65.00',
+            'ট্রানজেকশন আইডি রেফারেন্স', 'DG907FG2PK [0 Nafisha',
+        ]
+        result = extract_mobile_money_fields([{'text': t, 'confidence': 80} for t in lines])
+        self.assertEqual(result['amount']['value'], '480.00')
+        self.assertEqual(result['charge']['value'], '5.00')
+        self.assertEqual(result['transaction_id']['value'], 'DG907FG2PK')
+        self.assertEqual(result['reference_name']['value'], 'Nafisha')
+
+    def test_copy_icon_zero_does_not_eat_reference_name(self):
+        result = extract_mobile_money_fields([
+            {'text': 'ট্রানজেকশন আইডি রেফারেন্স', 'confidence': 80},
+            {'text': 'DG907FG2PK [0 Nafisha', 'confidence': 74},
+        ])
+        self.assertEqual(result['transaction_id']['value'], 'DG907FG2PK')
+        self.assertEqual(result['reference_name']['value'], 'Nafisha')
+
+    def test_all_letter_trxid_restores_ones(self):
+        result = extract_mobile_money_fields([
+            {'text': t, 'confidence': 90}
+            for t in ['Send Money', '01966033384', 'TrxID : DIAIDIBOVB >']
+        ])
+        self.assertEqual(result['transaction_id']['value'], 'DIA1D1BOVB')
+
+    def test_trailing_ic_trxid_becomes_one(self):
+        result = extract_mobile_money_fields([
+            {'text': t, 'confidence': 90}
+            for t in ['সময় ট্রানজেকশন আইডি', '07:26pm 19/08/26 DHJ4LVGDIC', 'পরিমাণ', '6480.00']
+        ])
+        self.assertEqual(result['transaction_id']['value'], 'DHJ4LVGD1C')
+        self.assertEqual(result['amount']['value'], '480.00')
+
     def test_bengali_popup_shared_value_row_reads_reference(self):
         # Upscaled OCR of the Bengali bottom-sheet often merges TrxID +
         # Reference onto one value row under a shared label row.

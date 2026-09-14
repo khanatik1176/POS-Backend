@@ -10,18 +10,20 @@ import re
 LABEL_PATTERNS = {
     # OCR often garbles "TrxID" / "Transaction ID" (I→l, I→1, missing spaces).
     # "1110" is a common grayscale-OCR reading of "TrxID".
+    # Bengali labels: Tesseract drops nuktas / confuses ড↔দ↔ভ on "আইডি".
     'transaction_id': [
         r'trx[\s.:_-]*[il1|]d',
         r'transact[a-z]*[\s.:_-]*[il1|]d',
-        r'ট্রানজেকশন\s*আই[ডদভ]ি',
+        r'ট্রানজেক[শস]ন\s*আই[ডদভ]ি?',
+        r'ট্রানজেক[শস]ন',
         r'\b1110\b',
     ],
-    'phone_number': [r'একাউন্ট', r'\baccount\b'],
-    'transaction_datetime': [r'\btime\b', r'সম[য়য়]'],
-    'amount': [r'\bamount\b', r'পরিমাণ'],
-    'charge': [r'\bcharge\b', r'চার্জ'],
+    'phone_number': [r'একাউন[্]?ট?', r'\baccount\b'],
+    'transaction_datetime': [r'\btime\b', r'সম[য়য়য]'],
+    'amount': [r'\bamount\b', r'পরিমা[ণন]'],
+    'charge': [r'\bcharge\b', r'চা[্]?র্?জ'],
     'total_amount': [r'\btotal\b'],
-    'reference_name': [r'\breference\b', r'রেফারেন্স'],
+    'reference_name': [r'\breference\b', r'রেফারেন[্]?স'],
 }
 
 BENGALI_DIGIT_MAP = str.maketrans('০১২৩৪৫৬৭৮৯', '0123456789')
@@ -37,8 +39,8 @@ DATETIME_LONG_RE = re.compile(r'\d{1,2}\s+[A-Za-z]+\s+\d{4},?\s*\d{1,2}:\d{2}\s*
 DATETIME_COMPACT_RE = re.compile(r'\d{1,2}:\d{2}\s*[APap][Mm]\s+\d{1,2}/\d{1,2}/\d{2,4}')
 DATETIME_COMPACT_DATE_FIRST_RE = re.compile(r'\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}\s*[APap][Mm]')
 CURRENCY_VALUE_RE = re.compile(r'(?:[-−]\s*)?(?:৳|%|Tk\.?|টাকা)?\s*([0-9][0-9,]*\.?[0-9]{0,2})\s*(?:৳|%|Tk\.?|টাকা)?')
-NO_CHARGE_RE = re.compile(r'no\s*charge', re.IGNORECASE)
-COPY_ICON_JUNK_RE = re.compile(r'\[[A-Za-z0-9]{0,3}\]?')
+NO_CHARGE_RE = re.compile(r'no\s*charge|চার্জ\s*নেই|কোন\s*চার্জ\s*নেই|বিনা\s*চার্জ', re.IGNORECASE)
+COPY_ICON_JUNK_RE = re.compile(r'\[\s*[A-Za-z0-9]{0,3}\s*\]|\[\s*[A-Za-z0-9]{1,3}(?=\s)')
 NAME_TOKEN_RE = re.compile(r'[A-Za-z][A-Za-z .]{1,29}')
 
 # Regex-validated extractions are trustworthy even when Tesseract confidence
@@ -98,10 +100,23 @@ def _extract_datetime(text):
 
 
 def _normalize_currency_amount(value):
-    if re.fullmatch(r'[68]\d{3}\.\d{2}', value):
+    # ৳ misread as a glued leading 6/8 (6480.00 → 480.00, 6300.00 → 300.00).
+    if re.fullmatch(r'[68]\d{3,}\.\d{2}', value):
         stripped = value[1:]
         whole = int(stripped.split('.')[0])
-        if 1 <= whole <= 999:
+        if 1 <= whole <= 9999:
+            return stripped
+    return value
+
+
+def _normalize_charge_amount(value):
+    value = _normalize_currency_amount(value)
+    # ৳5.00 → 65.00 / 85.00 on Bangla amount+charge grids.
+    if re.fullmatch(r'[68]\d\.\d{2}', value):
+        return value[1:]
+    if re.fullmatch(r'[68]\d{2}\.\d{2}', value):
+        stripped = value[1:]
+        if float(stripped) <= 99:
             return stripped
     return value
 
@@ -150,8 +165,10 @@ def _extract_reference_name(raw_text):
     remainder = DATETIME_LONG_RE.sub('', remainder)
     remainder = DATETIME_COMPACT_RE.sub('', remainder)
     remainder = DATETIME_COMPACT_DATE_FIRST_RE.sub('', remainder)
-    remainder = CURRENCY_VALUE_RE.sub('', remainder)
+    # Strip copy-icon OCR junk before currency so "[0 Name" doesn't lose the 0
+    # into the amount regex and then turn "[Nafisha" into "isha".
     remainder = COPY_ICON_JUNK_RE.sub('', remainder)
+    remainder = CURRENCY_VALUE_RE.sub('', remainder)
     remainder = remainder.strip(' :–-_|').strip()
     remainder = _clean_reference_candidate(remainder)
     if _is_name_candidate(remainder):
@@ -165,7 +182,12 @@ def _extract_reference_name(raw_text):
 
 def _normalize_transaction_id(value):
     value = value.strip(' >|')
+    # Trailing "IC"/"ID" often means "1C"/"1D".
     value = re.sub(r'I([A-Z])$', r'1\1', value)
+    # When OCR turns every "1" into "I", the ID becomes all letters — restore
+    # digits, but keep a 2-letter prefix like "DI"/"DH" intact.
+    if value.isalpha() and 'I' in value:
+        value = re.sub(r'(?<=[A-Za-z]{2})I', '1', value)
     return value
 
 
@@ -179,8 +201,10 @@ def _strip_known_labels(text):
 def _extract_transaction_id(text, loose=False):
     text = _normalize_digits(text)
     match = TRANSACTION_ID_STRICT_RE.search(text)
-    if match and _is_plausible_transaction_id(match.group(0)):
-        return _normalize_transaction_id(match.group(0))
+    if match:
+        candidate = _normalize_transaction_id(match.group(0))
+        if _is_plausible_transaction_id(candidate):
+            return candidate
     if loose:
         for match in TRANSACTION_ID_LOOSE_RE.finditer(text):
             candidate = _normalize_transaction_id(match.group(0))
@@ -210,7 +234,7 @@ def _extract_value(key, text, labeled=False):
             return max(values, key=lambda value: float(value or 0))
         if key == 'amount':
             return values[0]
-        return values[1] if len(values) > 1 else values[0]
+        return _normalize_charge_amount(values[1] if len(values) > 1 else values[0])
     if key == 'reference_name':
         return _extract_reference_name(text)
     return None
@@ -261,14 +285,21 @@ def extract_fields(ocr_lines):
             if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
                 value = _extract_value(key, text, labeled=True)
                 confidence = line.get('confidence', 0)
-                if not value and i + 1 < line_count:
-                    next_line = ocr_lines[i + 1]
-                    next_text = next_line.get('text', '')
-                    if next_text:
+                # Bangla stacked layouts sometimes insert a junk OCR line
+                # between the label and the value — look 1–2 lines ahead.
+                if not value:
+                    for offset in (1, 2):
+                        if i + offset >= line_count:
+                            break
+                        next_line = ocr_lines[i + offset]
+                        next_text = next_line.get('text', '')
+                        if not next_text:
+                            continue
                         next_value = _extract_value(key, next_text, labeled=True)
                         if next_value:
                             value = next_value
                             confidence = max(confidence, next_line.get('confidence', 0))
+                            break
                 if value:
                     results[key] = {'value': value, 'confidence': _with_boosted_confidence(confidence)}
                     break
