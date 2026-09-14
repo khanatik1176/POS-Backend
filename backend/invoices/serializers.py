@@ -1,7 +1,8 @@
 from rest_framework import serializers
 
-from .field_template import FIELD_KEYS, ORIGIN_CHOICES
+from .field_template import ORIGIN_CHOICES
 from .models import InvoiceImage, InvoiceRecord
+from .record_types import FIELD_KEYS_BY_TYPE, INVOICE, RECORD_TYPES
 
 LINE_ITEM_ORIGINS = ('auto', 'manual', 'empty')
 
@@ -28,34 +29,39 @@ class InvoiceRecordSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceRecord
-        fields = ['id', 'created_at', 'updated_at', 'fields', 'line_items', 'has_pending_server_review', 'notified', 'images']
+        fields = ['id', 'record_type', 'created_at', 'updated_at', 'fields', 'line_items', 'has_pending_server_review', 'notified', 'images']
 
 
 class InvoiceRecordCreateSerializer(serializers.Serializer):
+    record_type = serializers.ChoiceField(choices=RECORD_TYPES, default=INVOICE)
     fields = serializers.DictField()
     line_items = serializers.ListField(child=serializers.DictField(), required=False, default=list)
     images = serializers.ListField(child=serializers.DictField(), required=False, default=list)
 
-    def validate_fields(self, value):
+    def validate(self, attrs):
+        record_type = attrs.get('record_type', INVOICE)
+        field_keys = FIELD_KEYS_BY_TYPE[record_type]
+        value = attrs.get('fields')
         if not isinstance(value, dict):
-            raise serializers.ValidationError('fields must be an object keyed by field name.')
-        unknown = set(value.keys()) - FIELD_KEYS
+            raise serializers.ValidationError({'fields': 'fields must be an object keyed by field name.'})
+        unknown = set(value.keys()) - field_keys
         if unknown:
-            raise serializers.ValidationError(f'Unknown field keys: {sorted(unknown)}')
+            raise serializers.ValidationError({'fields': f'Unknown field keys for "{record_type}": {sorted(unknown)}'})
 
         normalized = {}
-        for key in FIELD_KEYS:
+        for key in field_keys:
             entry = value.get(key) or {}
             origin = entry.get('origin', 'empty')
             if origin not in ORIGIN_CHOICES:
-                raise serializers.ValidationError(f'Invalid origin "{origin}" for field "{key}".')
+                raise serializers.ValidationError({'fields': f'Invalid origin "{origin}" for field "{key}".'})
             confidence = entry.get('confidence')
             normalized[key] = {
                 'value': entry.get('value') or '',
                 'origin': origin,
                 'confidence': float(confidence) if confidence is not None else None,
             }
-        return normalized
+        attrs['fields'] = normalized
+        return attrs
 
     def validate_images(self, value):
         cleaned = []
@@ -92,8 +98,9 @@ class InvoiceRecordCreateSerializer(serializers.Serializer):
         images_data = validated_data.pop('images', [])
         has_unreadable = any(image['local_read_status'] == 'unreadable' for image in images_data)
 
+        record_type = validated_data['record_type']
         fields = validated_data['fields']
-        for key in FIELD_KEYS:
+        for key in FIELD_KEYS_BY_TYPE[record_type]:
             field = fields[key]
             if field['value'] == '' and field['origin'] == 'empty' and has_unreadable:
                 field['origin'] = 'server-pending'
@@ -101,6 +108,7 @@ class InvoiceRecordCreateSerializer(serializers.Serializer):
         user = getattr(request, 'user', None)
         record = InvoiceRecord.objects.create(
             created_by=user if user and user.is_authenticated else None,
+            record_type=record_type,
             fields=fields,
             line_items=validated_data.get('line_items', []),
             has_pending_server_review=has_unreadable,

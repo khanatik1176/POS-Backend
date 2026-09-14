@@ -7,9 +7,9 @@ from rest_framework.views import APIView
 
 from accounts.permissions import require_action
 
-from .field_template import FIELD_TEMPLATE
 from .models import InvoiceImage, InvoiceRecord
 from .ocr_service import process_record_escalation
+from .record_types import FIELD_TEMPLATES
 from .serializers import (
     InvoiceImageDetailSerializer,
     InvoiceRecordCreateSerializer,
@@ -21,7 +21,7 @@ class InvoiceFieldTemplateAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated, require_action('ocr.view')]
 
     def get(self, request):
-        return Response({'fields': FIELD_TEMPLATE})
+        return Response({'templates': FIELD_TEMPLATES})
 
 
 class InvoiceRecordListCreateAPIView(generics.ListCreateAPIView):

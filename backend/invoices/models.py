@@ -3,6 +3,8 @@ from django.db import models
 
 from orders.models import TimeStampedModel
 
+from .record_types import INVOICE, RECORD_TYPE_CHOICES
+
 
 class InvoiceRecord(TimeStampedModel):
     created_by = models.ForeignKey(
@@ -12,6 +14,7 @@ class InvoiceRecord(TimeStampedModel):
         blank=True,
         related_name='invoice_records',
     )
+    record_type = models.CharField(max_length=30, choices=RECORD_TYPE_CHOICES, default=INVOICE)
     fields = models.JSONField(default=dict)
     line_items = models.JSONField(default=list, blank=True)
     has_pending_server_review = models.BooleanField(default=False)
@@ -21,8 +24,14 @@ class InvoiceRecord(TimeStampedModel):
         ordering = ['-created_at']
 
     def __str__(self):
-        vendor = (self.fields or {}).get('vendor_name', {}).get('value') or 'Untitled'
-        return f'Invoice #{self.id} - {vendor}'
+        fields = self.fields or {}
+        label = (
+            fields.get('vendor_name', {}).get('value')
+            or fields.get('reference_name', {}).get('value')
+            or fields.get('transaction_id', {}).get('value')
+            or 'Untitled'
+        )
+        return f'{self.get_record_type_display()} #{self.id} - {label}'
 
 
 class InvoiceImage(TimeStampedModel):

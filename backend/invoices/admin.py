@@ -12,7 +12,7 @@ class InvoiceImageInline(admin.TabularInline):
 
 @admin.register(InvoiceRecord)
 class InvoiceRecordAdmin(admin.ModelAdmin):
-    list_display = ('id', 'created_by', 'has_pending_server_review', 'notified', 'created_at')
-    list_filter = ('has_pending_server_review', 'notified')
+    list_display = ('id', 'record_type', 'created_by', 'has_pending_server_review', 'notified', 'created_at')
+    list_filter = ('record_type', 'has_pending_server_review', 'notified')
     search_fields = ('id',)
     inlines = [InvoiceImageInline]
